@@ -15,7 +15,14 @@ const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = await User.findById(decoded.id).select('-password');
+    const user = await User.findById(decoded.id).select('-password');
+       if (!user) return res.status(404).json({ message: 'User not found' });
+
+    req.user = {
+      id: user._id.toString(), // normalized user ID
+      role: user.role,
+      email: user.email,
+    };
     next();
   } catch (err) {
     return res.status(401).json({ message: 'Token is not valid' });
