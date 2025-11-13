@@ -648,4 +648,91 @@ router.post('/download-bill-pdf', protect, async (req, res) => {
         });
     }
 });
+
+router.get('/view-latest-pdf', protect, async (req, res) => {
+    try {
+        const userId = req.user._id;
+        
+        // Get user details
+        const userDetail = await PersonalDetail.findOne({ userId });
+        if (!userDetail || !userDetail.ReferanceNo) {
+            return res.status(404).json({
+                success: false,
+                message: 'User details or reference number not found'
+            });
+        }
+
+        const customerNumber = userDetail.ReferanceNo;
+        const pdfsFolder = path.join(__dirname, '../bills/pdfs');
+
+        if (!fs.existsSync(pdfsFolder)) {
+            return res.status(404).json({
+                success: false,
+                message: 'No PDFs found'
+            });
+        }
+
+        // Find latest PDF for this customer
+        const allFiles = fs.readdirSync(pdfsFolder);
+        const userPdfs = allFiles.filter(file => 
+            file.startsWith(`bill_${customerNumber}_`) && file.endsWith('.pdf')
+        );
+
+        if (userPdfs.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No PDFs found for your account'
+            });
+        }
+
+        // Get the most recent PDF
+        const latestPdf = userPdfs.reduce((latest, filename) => {
+            const timestampMatch = filename.match(/_(\d+)\.pdf$/);
+            if (timestampMatch) {
+                const fileTimestamp = parseInt(timestampMatch[1]);
+                const latestTimestamp = latest.timestamp || 0;
+                
+                if (fileTimestamp > latestTimestamp) {
+                    return { filename, timestamp: fileTimestamp };
+                }
+            }
+            return latest;
+        }, { filename: userPdfs[0], timestamp: 0 });
+
+        const pdfPath = path.join(pdfsFolder, latestPdf.filename);
+        
+        if (!fs.existsSync(pdfPath)) {
+            return res.status(404).json({
+                success: false,
+                message: 'PDF file not found'
+            });
+        }
+
+        const stats = fs.statSync(pdfPath);
+        const fileSize = stats.size;
+        const pdfDate = new Date(latestPdf.timestamp);
+
+        console.log(`🔍 Serving latest PDF for ${customerNumber}: ${latestPdf.filename}`);
+
+        // Set headers for PDF viewing
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${latestPdf.filename}"`);
+        res.setHeader('Content-Length', fileSize);
+        res.setHeader('X-PDF-Date', pdfDate.toISOString());
+        res.setHeader('X-Customer-Number', customerNumber);
+        res.setHeader('Cache-Control', 'no-cache');
+
+        // Stream the PDF file
+        const fileStream = fs.createReadStream(pdfPath);
+        fileStream.pipe(res);
+
+    } catch (error) {
+        console.error('Error serving latest PDF:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to serve PDF file',
+            error: error.message
+        });
+    }
+});
 module.exports = router;
