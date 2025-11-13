@@ -10,11 +10,11 @@ const PersonDetailSchema = new mongoose.Schema({
   ReferanceNo: {
     type: String,
     required: [true, 'Please add a reference number'],
-    minlength: 15,
+    minlength: 14,
   },
   CustomerNo: {
     type: String,
-    minlength: 11,
+    minlength: 10,
   },
   createdAt: {
     type: Date,
