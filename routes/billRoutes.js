@@ -493,5 +493,142 @@ router.get('/open-bill/:filename', (req, res) => {
         });
     }
 });
+router.post('/download-bill-pdf', protect, async (req, res) => {
+    const userId = req.user._id;
+    let browser = null;
 
+    try {
+        // Fetch customer reference number from DB
+        const userDetail = await PersonalDetail.findOne({ userId });
+
+        if (!userDetail) {
+            return res.status(404).json({
+                success: false,
+                message: 'User details not found'
+            });
+        }
+
+        const customerNumber = userDetail.ReferanceNo;
+        if (!customerNumber) {
+            return res.status(404).json({
+                success: false,
+                message: 'Reference number missing for this user'
+            });
+        }
+
+        // Launch browser
+        browser = await puppeteer.launch({
+            headless: true, // Can be true for PDF generation
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            defaultViewport: null
+        });
+
+        const page = await browser.newPage();
+        
+        console.log('Navigating to bill website for PDF generation...');
+        
+        // Navigate to the bill website
+        await page.goto('https://bill.pitc.com.pk/mepcobill', {
+            waitUntil: 'networkidle2',
+            timeout: 60000
+        });
+
+        console.log('Website loaded successfully');
+
+        // Wait for the input field and fill it
+        await page.waitForSelector('input[name="searchTextBox"]', { timeout: 15000 });
+        console.log('Input field found, filling customer number...');
+        
+        await page.type('input[name="searchTextBox"]', customerNumber, { delay: 100 });
+        console.log(`Customer number ${customerNumber} filled`);
+
+        // Wait before clicking
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        // Click the search button
+        console.log('Clicking search button...');
+        await page.click('input[type="submit"], button[type="submit"], input[value="Search"]');
+        
+        console.log('Search button clicked, waiting for results...');
+
+        // Wait for results to load
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        // Get bill information for filename
+        const pageTitle = await page.title();
+        const currentUrl = page.url();
+        
+        console.log('Current URL:', currentUrl);
+        console.log('Page Title:', pageTitle);
+
+        // Create PDFs folder if it doesn't exist
+        const pdfsFolder = path.join(__dirname, '../bills/pdfs');
+        if (!fs.existsSync(pdfsFolder)) {
+            fs.mkdirSync(pdfsFolder, { recursive: true });
+            console.log('PDFs folder created');
+        }
+
+        // Generate PDF
+        const pdfFilename = `bill_${customerNumber}_${Date.now()}.pdf`;
+        const pdfPath = path.join(pdfsFolder, pdfFilename);
+
+        console.log('Generating PDF...');
+        
+        // PDF generation options
+        const pdfBuffer = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            margin: {
+                top: '20mm',
+                right: '15mm',
+                bottom: '20mm',
+                left: '15mm'
+            },
+            displayHeaderFooter: true,
+            headerTemplate: `
+                <div style="font-size: 10px; margin-left: 20px;">
+                    Bill Generated: <span class="date"></span>
+                </div>
+            `,
+            footerTemplate: `
+                <div style="font-size: 8px; margin: 0 auto; width: 100%; text-align: center;">
+                    Customer No: ${customerNumber} | Page <span class="pageNumber"></span> of <span class="totalPages"></span> | Generated on <span class="date"></span>
+                </div>
+            `
+        });
+
+        // Save PDF to file
+        fs.writeFileSync(pdfPath, pdfBuffer);
+        console.log(`PDF saved to: ${pdfPath}`);
+
+        // Close browser
+        await browser.close();
+
+        // Set response headers for file download
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename}"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('X-Filename', pdfFilename);
+        res.setHeader('X-Customer-Number', customerNumber);
+        res.setHeader('X-Generated-At', new Date().toISOString());
+
+        // Send PDF buffer
+        res.send(pdfBuffer);
+
+        console.log(`✅ PDF successfully generated and sent for customer: ${customerNumber}`);
+
+    } catch (error) {
+        if (browser) {
+            await browser.close();
+        }
+        
+        console.error('Error in PDF generation:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate PDF bill',
+            error: error.message
+        });
+    }
+});
 module.exports = router;
