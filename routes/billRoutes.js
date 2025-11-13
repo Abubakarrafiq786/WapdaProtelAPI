@@ -499,120 +499,152 @@ router.post('/download-bill-pdf', protect, async (req, res) => {
 
     try {
         const userDetail = await PersonalDetail.findOne({ userId });
-
-        if (!userDetail) {
+        if (!userDetail || !userDetail.ReferanceNo) {
             return res.status(404).json({
                 success: false,
-                message: 'User details not found'
+                message: 'User details or reference number not found'
             });
         }
 
         const customerNumber = userDetail.ReferanceNo;
-        if (!customerNumber) {
-            return res.status(404).json({
-                success: false,
-                message: 'Reference number missing for this user'
-            });
-        }
 
         browser = await puppeteer.launch({
-            headless: true, 
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
-            defaultViewport: null
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu'
+            ],
+            defaultViewport: { width: 1280, height: 720 }
         });
 
         const page = await browser.newPage();
         
-        console.log('Navigating to bill website for PDF generation...');
+        // Set longer timeouts
+        page.setDefaultTimeout(60000);
+        page.setDefaultNavigationTimeout(60000);
+
+        console.log('🚀 Navigating to bill website...');
         
         await page.goto('https://bill.pitc.com.pk/mepcobill', {
-            waitUntil: 'networkidle2',
+            waitUntil: 'domcontentloaded',
             timeout: 60000
         });
 
-        console.log('Website loaded successfully');
+        console.log('✅ Website loaded');
 
-        await page.waitForSelector('input[name="searchTextBox"]', { timeout: 15000 });
-        console.log('Input field found, filling customer number...');
-        
-        await page.type('input[name="searchTextBox"]', customerNumber, { delay: 100 });
-        console.log(`Customer number ${customerNumber} filled`);
+        // Wait for and fill the search input
+        await page.waitForSelector('input[name="searchTextBox"]', { timeout: 30000 });
+        await page.type('input[name="searchTextBox"]', customerNumber, { delay: 50 });
+        console.log(`🔢 Customer number filled: ${customerNumber}`);
 
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        console.log('🔍 Clicking search button...');
+
+        // Strategy 1: Try with navigation wait
+        try {
+            await Promise.all([
+                page.click('input[type="submit"], input[id="btnSearch"], input[value="btnSearch"]'),
+                page.waitForNavigation({ 
+                    waitUntil: 'networkidle0', 
+                    timeout: 45000 
+                })
+            ]);
+            console.log('✅ Navigation completed');
+        } catch (navError) {
+            console.log('⚠️ No navigation detected, using alternative waiting strategy...');
+            
+            // Strategy 2: Just click and wait for content changes
+            await page.click('input[type="submit"], button[type="submit"], input[value="Search"]');
+            
+            // Wait for any network requests to complete
+            await page.waitForNetworkIdle({ timeout: 30000 });
+            
+            // Wait for potential content updates
+            await new Promise(resolve => setTimeout(resolve, 8000));
+            
+            // Check if page content changed
+            const contentChanged = await page.evaluate(() => {
+                return document.body.innerHTML.length > 1000; // Basic check
+            });
+            
+            if (!contentChanged) {
+                console.log('⚠️ Page content may not have updated');
+            }
+        }
+
+        // Final wait for any dynamic content
         await new Promise(resolve => setTimeout(resolve, 5000));
 
-        console.log('Clicking search button...');
-        await page.click('input[type="submit"], button[type="submit"], input[value="Search"]');
-        
-        console.log('Search button clicked, waiting for results...');
-
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-        await new Promise(resolve => setTimeout(resolve, 5000));
-
-        const pageTitle = await page.title();
         const currentUrl = page.url();
+        const pageTitle = await page.title();
         
-        console.log('Current URL:', currentUrl);
-        console.log('Page Title:', pageTitle);
+        console.log('📄 Current URL:', currentUrl);
+        console.log('🏷️ Page Title:', pageTitle);
 
+        // Take a screenshot for debugging
+        const screenshotPath = path.join(__dirname, '../bills/pdf');
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log('📸 Debug screenshot saved');
+
+        // Generate PDF
         const pdfsFolder = path.join(__dirname, '../bills/pdfs');
         if (!fs.existsSync(pdfsFolder)) {
             fs.mkdirSync(pdfsFolder, { recursive: true });
-            console.log('PDFs folder created');
         }
 
         const pdfFilename = `bill_${customerNumber}_${Date.now()}.pdf`;
         const pdfPath = path.join(pdfsFolder, pdfFilename);
 
-        console.log('Generating PDF...');
+        console.log('📊 Generating PDF...');
         
         const pdfBuffer = await page.pdf({
             format: 'A4',
             printBackground: true,
-            margin: {
-                top: '20mm',
-                right: '15mm',
-                bottom: '20mm',
-                left: '15mm'
-            },
+            margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
             displayHeaderFooter: true,
             headerTemplate: `
-                <div style="font-size: 10px; margin-left: 20px;">
-                    Bill Generated: <span class="date"></span>
+                <div style="font-size: 10px; margin-left: 20px; font-family: Arial;">
+                    MEPCO Bill | Generated: <span class="date"></span>
                 </div>
             `,
             footerTemplate: `
-                <div style="font-size: 8px; margin: 0 auto; width: 100%; text-align: center;">
-                    Customer No: ${customerNumber} | Page <span class="pageNumber"></span> of <span class="totalPages"></span> | Generated on <span class="date"></span>
+                <div style="font-size: 8px; text-align: center; width: 100%; font-family: Arial;">
+                    Customer: ${customerNumber} | Page <span class="pageNumber"></span> of <span class="totalPages"></span>
                 </div>
-            `
+            `,
+            timeout: 30000
         });
 
         fs.writeFileSync(pdfPath, pdfBuffer);
-        console.log(`PDF saved to: ${pdfPath}`);
+        console.log(`💾 PDF saved: ${pdfPath}`);
 
         await browser.close();
 
+        // Send response
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename}"`);
         res.setHeader('Content-Length', pdfBuffer.length);
-        res.setHeader('X-Filename', pdfFilename);
-        res.setHeader('X-Customer-Number', customerNumber);
-        res.setHeader('X-Generated-At', new Date().toISOString());
-
+        
         res.send(pdfBuffer);
-
-        console.log(`✅ PDF successfully generated and sent for customer: ${customerNumber}`);
+        console.log(`✅ PDF delivered for customer: ${customerNumber}`);
 
     } catch (error) {
         if (browser) {
             await browser.close();
         }
         
-        console.error('Error in PDF generation:', error);
+        console.error('❌ PDF generation failed:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to generate PDF bill',
-            error: error.message
+            error: error.message,
+            suggestion: 'The bill search might be taking longer than expected. Please try again.'
         });
     }
 });
