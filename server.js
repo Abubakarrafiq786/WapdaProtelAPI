@@ -20,6 +20,8 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/person-details', require('./routes/personDetailRoutes'));
 app.use('/api/bill', require('./routes/billRoutes'));
+app.use('/api/billinfo', require('./routes/billinfoRoutes'));
+app.use('/api/pdf', require('./routes/pdfExtractor'));
 
 // Test route
 app.get('/', (req, res) => {
