@@ -538,7 +538,7 @@ router.post('/download-bill-pdf', protect, async (req, res) => {
         console.log('✅ Website loaded');
 
         // Wait for and fill the search input
-        await page.waitForSelector('input[name="searchTextBox"]', { timeout: 30000 });
+        await page.waitForSelector('input[name="searchTextBox"]', { timeout: 40000 });
         await page.type('input[name="searchTextBox"]', customerNumber, { delay: 50 });
         console.log(`🔢 Customer number filled: ${customerNumber}`);
 
@@ -552,7 +552,7 @@ router.post('/download-bill-pdf', protect, async (req, res) => {
                 page.click('input[type="submit"], input[id="btnSearch"], input[value="btnSearch"]'),
                 page.waitForNavigation({ 
                     waitUntil: 'networkidle0', 
-                    timeout: 45000 
+                    timeout: 50000 
                 })
             ]);
             console.log('✅ Navigation completed');
@@ -563,7 +563,7 @@ router.post('/download-bill-pdf', protect, async (req, res) => {
             await page.click('input[type="submit"], button[type="submit"], input[value="Search"]');
             
             // Wait for any network requests to complete
-            await page.waitForNetworkIdle({ timeout: 30000 });
+            await page.waitForNetworkIdle({ timeout: 50000 });
             
             // Wait for potential content updates
             await new Promise(resolve => setTimeout(resolve, 8000));
